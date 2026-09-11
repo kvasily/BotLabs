@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+mo2_fish/logs/
+mo2_fish/recordings/
+build/
+logs/
+profiles/
+MO2Fish.exe
+*.zip
+MO2Fish.spec
+requirements-build.txt

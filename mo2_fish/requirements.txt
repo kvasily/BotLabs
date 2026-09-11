@@ -1,0 +1,10 @@
+numpy>=1.26,<3
+SoundCard>=0.4.3,<0.5
+soundfile>=0.12.1,<0.14
+opencv-python>=4.9,<5
+mss>=9,<11
+PyYAML>=6,<7
+PySide6>=6.8,<7
+imageio-ffmpeg>=0.6,<0.7
+# Optional OCR: pip install pytesseract (also install the Tesseract executable).
+# Input uses a thin Windows SendInput wrapper; no pydirectinput dependency needed.
