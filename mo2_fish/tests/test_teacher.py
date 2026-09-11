@@ -9,6 +9,7 @@ import numpy as np
 import yaml
 from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QCloseEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QMessageBox
 
 from gui.teacher_document import TeacherDocument
@@ -215,24 +216,49 @@ class TeacherControlTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             _, profile = profile_at(directory)
             teacher = VideoTeacher(profile, ImmediateJobs())
+            messages = []
+            teacher.message.connect(messages.append)
             try:
                 teacher.resize(1280, 1000)
                 teacher.show()
+                teacher.activateWindow()
                 APP.processEvents()
                 teacher.document.replace("compass", np.zeros((1440, 2560, 3), np.uint8), (10, 20, 100, 50))
                 crop = teacher.document.changes["compass"]
                 height = teacher.canvas.height()
-                teacher.audio_splitter.button.click()
+                button = teacher.audio_splitter.button
+                self.assertIs(teacher.childAt(button.mapTo(teacher, button.rect().center())), button)
+                QTest.mouseClick(button, Qt.MouseButton.LeftButton)
                 APP.processEvents()
                 self.assertEqual(teacher.audio_splitter.sizes()[1], 0)
+                self.assertEqual(teacher.audio_splitter.widget(1).maximumHeight(), 0)
+                self.assertEqual(teacher.audio_splitter.widget(1).height(), 0)
+                self.assertEqual(messages[-1], "Audio tools hidden")
                 self.assertGreater(teacher.canvas.height(), height)
                 self.assertIs(teacher.document.changes["compass"], crop)
                 self.assertTrue(teacher.document.dirty)
+                teacher.video_path = Path(directory) / "keyboard-test.mp4"
+                with patch.object(teacher.source, "toggle") as toggle:
+                    QTest.keyClick(teacher, Qt.Key.Key_Space)
+                    toggle.assert_called_once()
+                teacher.video_path = None
                 teacher.sync_profile()
                 self.assertFalse(teacher.audio_splitter.button.isChecked())
-                teacher.audio_splitter.button.click()
+                teacher.resize(1280, 1100)
+                teacher.wave.setMinimumHeight(120)  # Child layout changes must not reopen the pane.
+                teacher.hide()
+                teacher.show()
+                APP.processEvents()
+                self.assertEqual(teacher.audio_splitter.sizes()[1], 0)
+                self.assertEqual(teacher.audio_splitter.widget(1).height(), 0)
+                teacher.resize(1280, 1000)
+                teacher.wave.setMinimumHeight(70)
+                QTest.mouseClick(button, Qt.MouseButton.LeftButton)
                 APP.processEvents()
                 self.assertGreater(teacher.audio_splitter.sizes()[1], 0)
+                self.assertGreater(teacher.audio_splitter.widget(1).maximumHeight(), 0)
+                self.assertGreaterEqual(teacher.audio_splitter.widget(1).height(), teacher.audio_splitter.widget(1).minimumSizeHint().height())
+                self.assertEqual(messages[-1], "Audio tools shown")
                 self.assertAlmostEqual(teacher.canvas.height(), height, delta=2)
                 self.assertIs(teacher.document.changes["compass"], crop)
             finally:

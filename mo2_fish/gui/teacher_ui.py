@@ -202,6 +202,8 @@ class VideoTeacher(QWidget):
         self.audio_info = QLabel("Mark In / Out while listening. Keep detector clips under one second; tension 40–120 ms.")
         audio_layout.addWidget(self.audio_info)
         self.audio_splitter = AudioToolsSplitter(video_panel, audio_panel)
+        self.audio_splitter.expanded_changed.connect(
+            lambda expanded: self.message.emit("Audio tools shown" if expanded else "Audio tools hidden"))
         layout.addWidget(self.audio_splitter, 1)
         self.shortcuts = []
         for key, callback in ((Qt.Key.Key_Space, self.toggle_play), (Qt.Key.Key_Left, lambda: self.skip(-1)),
