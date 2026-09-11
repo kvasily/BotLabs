@@ -189,7 +189,8 @@ class TeacherUiTests(unittest.TestCase):
                 teacher.on_frame(np.zeros((1440, 2560, 3), np.uint8), 0, 100, 30)
                 self.assertIn("Video: 2560 × 1440", teacher.video_label.text())
                 self.assertIn("Container: 1920 × 1080", teacher.video_label.text())
-                self.assertEqual(profile.data["video_source_resolution"], [2560, 1440])
+                self.assertEqual(teacher.document.source_size, [2560, 1440])
+                self.assertNotEqual(profile.data.get("video_source_resolution"), [2560, 1440])
                 before = profile.path.read_bytes()
                 teacher.canvas.resize(800, 600)
                 APP.processEvents()
@@ -217,8 +218,10 @@ class TeacherUiTests(unittest.TestCase):
                 self.assertIsNone(window.controller.validated)
                 self.assertFalse(window.controller.armed)
                 self.assertEqual(profile.data["rois"]["hit_marker"], [10, 20, 100, 50])
-                self.assertEqual(window.overlay.resolution, (2560, 1440))
+                self.assertEqual(window.overlay.resolution, (3840, 2160))
                 self.assertEqual(window.teacher.canvas.game_size, (2560, 1440))
+                self.assertTrue(window.teacher.save_document())
+                self.assertEqual(window.overlay.resolution, (2560, 1440))
             finally:
                 window.close()
 

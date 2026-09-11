@@ -54,6 +54,7 @@ def exercise_package(window, app, destination: Path | None = None) -> list[str]:
         teacher, original_profile = window.teacher, window.teacher.profile
         try:
             teacher.profile = profile
+            teacher.document.load(profile)
             teacher.sync_profile()
             teacher.canvas.set_frame(decoded)
             teacher.reported_size = (2560, 1440)
@@ -69,13 +70,17 @@ def exercise_package(window, app, destination: Path | None = None) -> list[str]:
                 window.grab().save(str(destination / "MO2Fish-teacher-1440p-to-4K.png"))
         finally:
             teacher.profile = original_profile
+            teacher.document.load(original_profile)
             teacher.canvas.frame = teacher.canvas.image = None
             teacher.canvas.outer = teacher.canvas.inner = None
             teacher.video_label.setText("Video: —")
             teacher.warning.setText("Video authoring only. Runtime perception uses the live game capture.")
-            teacher.crop_info.setText("Outer = search area • Inner = template • PNGs and YAML are saved in game pixels")
+            teacher.crop_info.setText("Select a role and draw. Green = selected; red = other roles. Save commits all dirty boxes.")
             teacher.sync_profile()
             window.tabs.setCurrentIndex(0)
+        from gui.teacher_checks import check_playback
+        report.append(check_playback(window.teacher, app, root, destination))
+        window.tabs.setCurrentIndex(0)
     # Read-only COM/device discovery, no microphone stream is opened.
     from gui.com_audio import audio_apartment
     from audio.loopback import devices
