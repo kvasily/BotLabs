@@ -10,7 +10,7 @@ import numpy as np
 from numpy.typing import NDArray
 import soundfile as sf
 
-from config import ConfigError, Settings
+from config import ConfigError, Settings, audio_paths
 
 Samples = NDArray[np.float32]
 
@@ -109,11 +109,12 @@ class DetectorBank:
         self.rate: int = self.cfg["sample_rate"]
         # Leave a hop of headroom so a complete event survives arbitrary hop alignment.
         max_seconds = self.cfg["ring_seconds"] - self.cfg["hop_ms"] / 1000
-        self.templates = {name: load_wav(settings.asset(path), self.rate, max_seconds)
-                          for name, path in self.cfg["templates"].items() if path}
+        self.templates = {name: [load_wav(settings.asset(path), self.rate, max_seconds) for path in audio_paths(value)]
+                          for name, value in self.cfg["templates"].items() if value}
         for name, task in settings["tasks"].items():
             if task.get("audio_template"):
-                self.templates[f"fish_{name}"] = load_wav(settings.asset(task["audio_template"]), self.rate, max_seconds)
+                self.templates[f"fish_{name}"] = [load_wav(settings.asset(path), self.rate, max_seconds)
+                                                 for path in audio_paths(task["audio_template"])]
         self.events: deque[SoundEvent] = deque(maxlen=128)
         self.last_event: dict[str, float] = {}
         self.debounce = Debounce(self.cfg["tension_on_ms"] / 1000, self.cfg["tension_off_ms"] / 1000)
@@ -124,23 +125,25 @@ class DetectorBank:
         peaks: dict[str, tuple[float, float]] = {}
         level = rms(hop)
         flux = self.flux.update(hop)
-        for name, template in self.templates.items():
-            # Tension matches only in a short trailing window; it cannot remain held
-            # just because an old bend sound is still in the one-second ring.
-            tail = round(self.rate * self.cfg["tension_tail_ms"] / 1000) if name == "tension" else len(hop)
-            recent = ring[-(len(template) + tail - 1):]
-            correlation = normalized_correlation(recent, template)
-            if not len(correlation):
-                scores[name] = 0.0
-                continue
-            index = int(np.argmax(correlation))
-            score = max(0.0, float(correlation[index]))
-            matched = recent[index:index + len(template)]
-            if rms(matched) < self.cfg["min_rms"]:
-                score = 0.0
-            scores[name] = score
-            age = (len(recent) - index - len(template)) / self.rate
-            peaks[name] = score, now - age
+        for name, templates in self.templates.items():
+            scores[name] = 0.0
+            for template in templates:
+                # Score each take in the same trailing window. Tension cannot
+                # stay held just because an old bend remains in the ring.
+                tail = round(self.rate * self.cfg["tension_tail_ms"] / 1000) if name == "tension" else len(hop)
+                recent = ring[-(len(template) + tail - 1):]
+                correlation = normalized_correlation(recent, template)
+                if not len(correlation):
+                    continue
+                index = int(np.argmax(correlation))
+                score = max(0.0, float(correlation[index]))
+                matched = recent[index:index + len(template)]
+                if rms(matched) < self.cfg["min_rms"]:
+                    score = 0.0
+                age = (len(recent) - index - len(template)) / self.rate
+                if name not in peaks or score > scores[name]:
+                    scores[name] = score
+                    peaks[name] = score, now - age
         for name, (score, when) in peaks.items():
             if name == "tension":
                 continue

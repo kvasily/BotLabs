@@ -163,7 +163,7 @@ class AuthoringTests(unittest.TestCase):
             self.assertEqual(rate, 48000)
             self.assertEqual(data.shape, (4800,))
             self.assertGreater(peak, 0)
-            self.assertEqual(profile.data["audio"]["templates"]["tension"], "sfx/tension.wav")
+            self.assertEqual(profile.data["audio"]["templates"]["tension"], ["sfx/tension/01.wav"])
             with self.assertRaises(ValueError):
                 export_audio(profile, samples, 0, 1.1, "splash")
 

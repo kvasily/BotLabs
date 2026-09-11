@@ -13,6 +13,16 @@ class ConfigError(ValueError):
     """Actionable configuration/asset error."""
 
 
+def audio_paths(value) -> list[str]:
+    """Legacy single WAVs and multiple reference takes share one read path."""
+    if value is None or value == "":
+        return []
+    paths = [value] if isinstance(value, str) else value
+    if not isinstance(paths, list) or not all(isinstance(p, str) and p.strip() for p in paths):
+        raise ConfigError("Audio templates must be a WAV path or a list of WAV paths")
+    return paths
+
+
 @dataclass(frozen=True)
 class Rect:
     x: int
@@ -57,11 +67,11 @@ class Settings:
 
     def required_assets(self) -> list[Path]:
         values = [v for v in self["templates"].values() if v]
-        values += [v for v in self["audio"]["templates"].values() if v]
+        values += [path for value in self["audio"]["templates"].values() for path in audio_paths(value)]
         for task in self["tasks"].values():
             values += [task["hook_template"], task["bait_template"]]
             if task.get("audio_template"):
-                values.append(task["audio_template"])
+                values.extend(audio_paths(task["audio_template"]))
         c = self["compass"]
         values += [c["north_template"]] if c["mode"] == "north" else [t["path"] for t in c["tick_templates"]]
         values.append(self["logout"]["success_template"])

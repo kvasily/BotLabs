@@ -211,6 +211,12 @@ class MainWindow(PreserveGameFocus, QMainWindow):
         self.tabs.addTab(self.make_audio_tab(), "Audio device")
         self.tabs.addTab(self.make_profile_tab(), "Profile")
         self.tabs.addTab(self.make_overlay_tab(), "Overlay")
+        from gui.audio_clips import AudioClips
+        self.audio_clips = AudioClips()
+        self.audio_clips.message.connect(self.show_message)
+        self.audio_clips.audition.connect(self.begin_authoring)
+        self.audio_clips.audition.connect(self.teacher.source.pause)
+        self.tabs.addTab(self.audio_clips, "Audio clips")
         self.message = QLabel("Validate your setup to see exactly which files and fields are still missing.")
         self.message.setObjectName("message")
         self.message.setWordWrap(True)
@@ -449,6 +455,7 @@ class MainWindow(PreserveGameFocus, QMainWindow):
         self.editing_dirty = False
         self.teacher.profile = self.profile
         self.teacher.sync_profile()
+        self.audio_clips.refresh(self.profile)
         self.overlay.configure(self.profile.settings)
         while self.roi_layout.count():
             item = self.roi_layout.takeAt(0)
@@ -559,6 +566,7 @@ class MainWindow(PreserveGameFocus, QMainWindow):
     def closeEvent(self, event) -> None:
         self.controller.close()
         self.teacher.close_workers()
+        self.audio_clips.stop()
         self.probe.stop()
         self.overlay.close()
         self.store.remember(self.profile)

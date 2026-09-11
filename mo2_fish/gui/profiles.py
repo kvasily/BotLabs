@@ -132,10 +132,9 @@ class ProfileStore:
         refs += [(data.get("compass", {}), "north_template"), (data.get("logout", {}), "success_template")]
         refs += [(tick, "path") for tick in data.get("compass", {}).get("tick_templates", [])]
         destinations: dict[Path, str] = {}
-        for owner, key in refs:
-            value = owner.get(key)
-            if not isinstance(value, str) or value == "TODO":
-                continue
+        def rebase(value):
+            if not isinstance(value, str) or not value or value == "TODO":
+                return value
             old = cfg.asset(value)
             folder = "sfx" if old.suffix.lower() == ".wav" else "templates"
             new = destinations.setdefault(old, f"{folder}/{old.stem}_{hashlib.sha256(str(old).encode()).hexdigest()[:6]}{old.suffix}")
@@ -143,11 +142,15 @@ class ProfileStore:
             if not Path(value).is_absolute() and Path(value).parts[0] == folder and ".." not in Path(value).parts:
                 new = value.replace("\\", "/")
                 destinations[old] = new
-            owner[key] = new
             target = destination / new
             target.parent.mkdir(parents=True, exist_ok=True)
             if old.is_file():
                 shutil.copy2(old, target)
+            return new
+        for owner, key in refs:
+            if key in owner:
+                value = owner[key]
+                owner[key] = [rebase(path) for path in value] if isinstance(value, list) else rebase(value)
         config_path = destination / "config.yaml"
         config_path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
         result = Profile(config_path)

@@ -199,7 +199,7 @@ class AudioTests(unittest.TestCase):
                 sf.write(path, rng.normal(0, 0.1, 1920), 48000, subtype="FLOAT")
                 cfg["audio"]["templates"][name] = str(path)
             bank = DetectorBank(cfg)
-            clip = bank.templates["tension"]
+            clip = bank.templates["tension"][0]
             ring = np.empty(0, dtype=np.float32)
             now = 1.0
             for _ in range(8):

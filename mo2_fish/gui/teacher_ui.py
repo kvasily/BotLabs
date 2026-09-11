@@ -510,6 +510,7 @@ class VideoTeacher(QWidget):
     def clear_video(self):
         self.source.close()
         self.video_path = self.audio_path = None
+        self.audio_offset = 0.0
         self._audio_request += 1
         self.reported_size = None
         self.canvas.image = self.canvas.frame = None
@@ -596,6 +597,7 @@ class VideoTeacher(QWidget):
 
     def update_time(self):
         self.position_label.setText(f"{timestamp(self.position)} / {timestamp(self.duration_ms)}")
+        self.wave.set_playhead(self.position, self.audio_offset)
 
     def begin_scrub(self):
         self.scrub.dragging = True
@@ -644,6 +646,7 @@ class VideoTeacher(QWidget):
 
     def on_audio(self, samples):
         self.wave.set_samples(samples)
+        self.wave.set_playhead(self.position, self.audio_offset)
         self.audio_info.setText(f"Waveform {self.audio_offset:.3f}–{self.audio_offset+len(samples)/48000:.3f}s • 48 kHz mono")
 
     def on_live_audio(self, samples):
@@ -664,7 +667,7 @@ class VideoTeacher(QWidget):
 
     def audio_selection(self):
         start, end = self.in_s.value(), self.out_s.value()
-        maximum = 1-self.profile.data["audio"]["hop_ms"]/1000
+        maximum = self.profile.data["audio"]["ring_seconds"]-self.profile.data["audio"]["hop_ms"]/1000
         if not 960 <= round((end-start)*48000) <= round(maximum*48000):
             raise ValueError(f"Choose a 20–{maximum*1000:.0f} ms clip; tension is best kept short.")
         path, samples = self.audio_path, self.wave.samples
@@ -702,7 +705,11 @@ class VideoTeacher(QWidget):
         def work():
             clip = selection()
             return export_audio(profile, clip, 0, len(clip)/48000, role)
-        self.write_job(work, lambda result: self.audio_info.setText(f"Saved {result[0].name} • peak hop RMS {result[1]:.5f}"))
+        def saved(result):
+            text = f"Saved {role} → {result[0]}"
+            self.audio_info.setText(text)
+            self.message.emit(text)
+        self.write_job(work, saved)
 
     def record_live(self):
         self.authoring.emit()

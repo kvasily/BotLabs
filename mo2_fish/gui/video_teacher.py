@@ -14,6 +14,7 @@ from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from audio.detectors import rms
+from config import audio_paths
 from gui.profiles import Profile
 from gui.coordmap import SpaceMap
 
@@ -137,17 +138,45 @@ def export_audio(profile: Profile, samples: np.ndarray, start: float, end: float
     if not 0 <= start < end <= len(samples) / 48000 + 1 / 48000:
         raise ValueError("In and Out must describe a nonempty selection inside the loaded audio")
     clip = samples[round(start * 48000):round(end * 48000)]
-    maximum = 1 - profile.data["audio"]["hop_ms"] / 1000
+    maximum = profile.data["audio"]["ring_seconds"] - profile.data["audio"]["hop_ms"] / 1000
     if not 0.02 <= len(clip) / 48000 <= maximum:
         raise ValueError(f"Choose 20–{round(maximum * 1000)} ms to fit the existing detector ring")
     if not np.isfinite(clip).all() or rms(clip - clip.mean()) < 1e-6:
         raise ValueError("The selected audio is silent or invalid")
-    path = profile.asset("sfx", f"{role}.wav")
-    sf.write(path, clip, 48000, subtype="PCM_16")
-    profile.patch(f"audio.templates.{role}", f"sfx/{role}.wav")
+    profile.reload()
+    old = profile.data["audio"]["templates"].get(role)
+    paths = list(audio_paths(old))
+    # Unrecorded default-profile placeholders are not previous takes.
+    if isinstance(old, str) and not profile.settings.asset(old).is_file():
+        paths = []
+    folder = profile.path.parent / "sfx" / role
+    folder.mkdir(parents=True, exist_ok=True)
+    number = max((int(p.stem) for p in folder.glob("*.wav") if p.stem.isdigit()), default=0) + 1
+    while True:
+        path = folder / f"{number:02d}.wav"
+        try:
+            output = path.open("xb")  # Never replace a previous take.
+            break
+        except FileExistsError:
+            number += 1
+    try:
+        with output:
+            sf.write(output, clip, 48000, format="WAV", subtype="PCM_16")
+        paths.append(path.relative_to(profile.path.parent).as_posix())
+        profile.patch(f"audio.templates.{role}", paths)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
     hop = round(48000 * profile.data["audio"]["hop_ms"] / 1000)
     peak = max(rms(clip[i:i + hop]) for i in range(0, len(clip), hop))
     return path, peak
+
+
+def waveform_playhead_x(video_ms: int, offset: float, duration: float, width: int):
+    seconds = video_ms / 1000 - offset
+    if duration <= 0 or width <= 0 or not 0 <= seconds <= duration:
+        return None
+    return seconds / duration * max(0, width - 1)
 
 
 class Waveform(QWidget):
@@ -159,6 +188,14 @@ class Waveform(QWidget):
         self.samples = np.empty(0, dtype=np.float32)
         self.in_s, self.out_s = 0.0, 0.0
         self.drag_start: float | None = None
+        self.video_ms, self.audio_offset = 0, 0.0
+
+    def set_playhead(self, video_ms: int, audio_offset: float = 0):
+        self.video_ms, self.audio_offset = video_ms, audio_offset
+        self.update()
+
+    def playhead_x(self):
+        return waveform_playhead_x(self.video_ms, self.audio_offset, len(self.samples) / 48000, self.width())
 
     def set_samples(self, samples: np.ndarray) -> None:
         self.samples = samples
@@ -181,6 +218,10 @@ class Waveform(QWidget):
             peak = float(np.max(np.abs(part)))
             height = min(1, peak * 2) * (self.height() - 8) / 2
             p.drawLine(QPointF(x, self.height() / 2 - height), QPointF(x, self.height() / 2 + height))
+        x = self.playhead_x()
+        if x is not None:
+            p.setPen(QPen(QColor("#ff3333"), 2))
+            p.drawLine(QPointF(x, 0), QPointF(x, self.height()))
 
     def _time(self, x: float) -> float:
         return min(1, max(0, x / max(1, self.width()))) * len(self.samples) / 48000
