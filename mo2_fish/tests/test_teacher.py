@@ -7,8 +7,8 @@ from unittest.mock import Mock, PropertyMock, patch
 import cv2
 import numpy as np
 import yaml
-from PySide6.QtCore import QEvent, QPointF, Qt
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+from PySide6.QtGui import QCloseEvent, QMouseEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QMessageBox
 
@@ -115,6 +115,57 @@ class TeacherDocumentTests(unittest.TestCase):
 
 
 class TeacherControlTests(unittest.TestCase):
+    def test_collapsed_audio_handle_can_resize_up_without_toggle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, profile = profile_at(directory)
+            teacher = VideoTeacher(profile, ImmediateJobs())
+            try:
+                teacher.resize(1280, 1000)
+                teacher.show()
+                APP.processEvents()
+                splitter = teacher.audio_splitter
+                splitter.set_audio_expanded(False)
+                APP.processEvents()
+                handle = splitter.handle(1)
+                self.assertTrue(handle.isVisible() and handle.isEnabled())
+                point = QPoint(handle.width() - 30, handle.height() // 2)
+                QTest.mousePress(handle, Qt.MouseButton.LeftButton, pos=point)
+                self.assertGreater(splitter.audio.maximumHeight(), 0)
+                self.assertEqual(splitter.sizes()[1], 0)
+                splitter.setSizes([2, 1])  # Simulate the handle's upward resize.
+                splitter.splitterMoved.emit(splitter.sizes()[0], 1)
+                QTest.mouseRelease(handle, Qt.MouseButton.LeftButton, pos=point)
+                APP.processEvents()
+                self.assertTrue(splitter.audio_expanded)
+                self.assertTrue(splitter.button.isChecked())
+                self.assertGreaterEqual(splitter.sizes()[1], splitter.audio.minimumSizeHint().height())
+                # A downward drag may collapse it again; a click with no drag
+                # must leave the zero-height constraint in place afterwards.
+                splitter.setSizes([1, 0])
+                splitter.splitterMoved.emit(splitter.sizes()[0], 1)
+                QTest.mouseClick(handle, Qt.MouseButton.LeftButton, pos=point)
+                self.assertFalse(splitter.audio_expanded)
+                self.assertEqual(splitter.audio.maximumHeight(), 0)
+                # Exercise Qt's actual handle mouse-move path as well as sizes.
+                origin = handle.mapToGlobal(point)
+                QTest.mousePress(handle, Qt.MouseButton.LeftButton, pos=point)
+                target = origin - QPoint(0, 240)
+                APP.sendEvent(handle, QMouseEvent(QEvent.Type.MouseMove, QPointF(handle.mapFromGlobal(target)),
+                                                  QPointF(target), Qt.MouseButton.NoButton,
+                                                  Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+                APP.sendEvent(handle, QMouseEvent(QEvent.Type.MouseButtonRelease, QPointF(handle.mapFromGlobal(target)),
+                                                  QPointF(target), Qt.MouseButton.LeftButton,
+                                                  Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier))
+                APP.processEvents()
+                self.assertTrue(splitter.audio_expanded)
+                self.assertGreaterEqual(splitter.sizes()[1], splitter.audio.minimumSizeHint().height())
+                splitter.button.click()
+                self.assertEqual(splitter.sizes()[1], 0)
+                splitter.button.click()
+                self.assertGreater(splitter.sizes()[1], 0)
+            finally:
+                teacher.close()
+
     def test_save_and_save_as_remember_only_current_video_and_reopen_it(self):
         with tempfile.TemporaryDirectory() as directory:
             store, profile = profile_at(directory)

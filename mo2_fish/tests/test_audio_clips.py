@@ -7,19 +7,51 @@ from unittest.mock import patch
 import numpy as np
 import soundfile as sf
 import yaml
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QPushButton
 
 from audio.detectors import DetectorBank
 from gui.audio_clips import AudioClips
 from gui.profiles import fingerprint
 from gui.teacher_document import TeacherDocument
-from gui.video_teacher import VideoTeacher, Waveform, export_audio, waveform_playhead_x
+from gui.video_teacher import VideoTeacher, Waveform, export_audio, waveform_playhead_x, waveform_seek_ms
 from test_coordmap import ImmediateJobs
 from test_gui import APP, profile_at
 
 
 class MultipleAudioTests(unittest.TestCase):
+    def test_middle_waveform_click_seeks_offset_time_without_changing_trim(self):
+        self.assertEqual(waveform_seek_ms(100, 400, 2, 10), 10500)
+        self.assertEqual(waveform_seek_ms(-10, 400, 2, 10), 10000)
+        self.assertEqual(waveform_seek_ms(500, 400, 2, 10), 12000)
+        self.assertIsNone(waveform_seek_ms(100, 400, 0, 10))
+        with tempfile.TemporaryDirectory() as directory:
+            _, profile = profile_at(directory)
+            teacher = VideoTeacher(profile, ImmediateJobs())
+            try:
+                teacher.wave.resize(400, 100)
+                with patch.object(teacher.source, "seek") as seek:
+                    QTest.mouseClick(teacher.wave, Qt.MouseButton.MiddleButton, pos=QPoint(100, 50))
+                    seek.assert_not_called()
+                    teacher.audio_offset = 10
+                    teacher.on_audio(np.zeros(96000, np.float32))
+                    teacher.wave.in_s, teacher.wave.out_s = .2, .4
+                    teacher.crop_frozen = True
+                    QTest.mouseClick(teacher.wave, Qt.MouseButton.MiddleButton, pos=QPoint(100, 50))
+                    seek.assert_called_once_with(10500)
+                    self.assertEqual((teacher.wave.in_s, teacher.wave.out_s), (.2, .4))
+                    self.assertEqual(teacher.wave.video_ms, 10500)
+                    self.assertIsNone(teacher.wave.drag_start)
+                    self.assertIsNone(teacher.canvas.start_point)
+                    self.assertFalse(teacher.crop_frozen)
+                    QTest.mousePress(teacher.wave, Qt.MouseButton.LeftButton, pos=QPoint(120, 50))
+                    QTest.mouseRelease(teacher.wave, Qt.MouseButton.LeftButton, pos=QPoint(200, 50))
+                    self.assertEqual((teacher.wave.in_s, teacher.wave.out_s), (.6, 1.0))
+                    seek.assert_called_once()
+            finally:
+                teacher.close()
+
     def test_two_exports_are_numbered_mono_files_and_yaml_list(self):
         with tempfile.TemporaryDirectory() as directory:
             _, profile = profile_at(directory)

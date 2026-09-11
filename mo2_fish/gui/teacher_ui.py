@@ -179,6 +179,7 @@ class VideoTeacher(QWidget):
         self.wave = Waveform()
         self.wave.setMinimumHeight(70)
         self.wave.selection.connect(self.wave_selection)
+        self.wave.seek_requested.connect(self.seek_from_waveform)
         audio_layout.addWidget(self.wave, 1)
         trim = QHBoxLayout()
         self.in_s, self.out_s = QDoubleSpinBox(), QDoubleSpinBox()
@@ -607,6 +608,10 @@ class VideoTeacher(QWidget):
         self.position = self.scrub.position = ms
         self.source.seek(ms)
         self.update_time()
+
+    def seek_from_waveform(self, ms):
+        self.crop_frozen = False
+        self.scrub_to(ms)
 
     def end_scrub(self):
         self.source.seek(self.timeline.value())

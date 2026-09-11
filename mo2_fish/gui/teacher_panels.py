@@ -3,6 +3,24 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QSplitter, QSplitterHandle, QToolButton
 
 
+class AudioToolsHandle(QSplitterHandle):
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.splitter().prepare_handle_drag()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            # A drag may collapse and reopen without releasing the pointer.
+            self.splitter().prepare_handle_drag()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.splitter().finish_handle_drag()
+
+
 class AudioToolsSplitter(QSplitter):
     expanded_changed = Signal(bool)
 
@@ -26,7 +44,7 @@ class AudioToolsSplitter(QSplitter):
         self.splitterMoved.connect(self.sync_toggle)
 
     def createHandle(self):
-        handle = QSplitterHandle(self.orientation(), self)
+        handle = AudioToolsHandle(self.orientation(), self)
         layout = QHBoxLayout(handle)
         layout.setContentsMargins(0, 0, 0, 0)
         handle.button = QToolButton(handle)
@@ -37,6 +55,18 @@ class AudioToolsSplitter(QSplitter):
         layout.addWidget(handle.button)
         layout.addStretch()
         return handle
+
+    def prepare_handle_drag(self):
+        if not self.audio_expanded:
+            # Keep the pane collapsed, but let Qt move it beyond zero again.
+            self.audio.setMaximumHeight(self._audio_maximum)
+            self.audio.setMinimumHeight(self._audio_minimum)
+            self.setSizes([1, 0])
+
+    def finish_handle_drag(self):
+        self.sync_toggle()
+        if not self.audio_expanded:
+            self.set_audio_expanded(False)
 
     def set_audio_expanded(self, expanded):
         expanded = bool(expanded)
@@ -66,6 +96,8 @@ class AudioToolsSplitter(QSplitter):
     def sync_toggle(self, *args):
         expanded = self.sizes()[1] > 0
         if expanded != self.audio_expanded:
+            if expanded:
+                self.expanded_sizes = self.sizes()
             self.set_audio_expanded(expanded)
             return
         if expanded:

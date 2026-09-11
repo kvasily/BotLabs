@@ -179,8 +179,19 @@ def waveform_playhead_x(video_ms: int, offset: float, duration: float, width: in
     return seconds / duration * max(0, width - 1)
 
 
+def waveform_time_at_x(x: float, width: int, duration: float) -> float:
+    return min(1, max(0, x / max(1, width))) * duration
+
+
+def waveform_seek_ms(x: float, width: int, duration: float, offset: float = 0):
+    if duration <= 0:
+        return None
+    return round((offset + waveform_time_at_x(x, width, duration)) * 1000)
+
+
 class Waveform(QWidget):
     selection = Signal(float, float)
+    seek_requested = Signal(int)
 
     def __init__(self) -> None:
         super().__init__()
@@ -224,10 +235,21 @@ class Waveform(QWidget):
             p.drawLine(QPointF(x, 0), QPointF(x, self.height()))
 
     def _time(self, x: float) -> float:
-        return min(1, max(0, x / max(1, self.width()))) * len(self.samples) / 48000
+        return waveform_time_at_x(x, self.width(), len(self.samples) / 48000)
 
     def mousePressEvent(self, event) -> None:
-        self.drag_start = self._time(event.position().x())
+        if not len(self.samples):
+            event.ignore()
+            return
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self.seek_requested.emit(waveform_seek_ms(event.position().x(), self.width(),
+                                                     len(self.samples) / 48000, self.audio_offset))
+            event.accept()
+        elif event.button() == Qt.MouseButton.LeftButton:
+            self.drag_start = self._time(event.position().x())
+            event.accept()
+        else:
+            event.ignore()
 
     def mouseMoveEvent(self, event) -> None:
         if self.drag_start is not None:
@@ -237,8 +259,9 @@ class Waveform(QWidget):
             self.update()
 
     def mouseReleaseEvent(self, event) -> None:
-        self.mouseMoveEvent(event)
-        self.drag_start = None
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.mouseMoveEvent(event)
+            self.drag_start = None
 
 
 from gui.teacher_ui import VideoTeacher
