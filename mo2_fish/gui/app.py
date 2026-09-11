@@ -315,7 +315,7 @@ class MainWindow(PreserveGameFocus, QMainWindow):
         title = QLabel("Live ROI overlay")
         title.setStyleSheet("font-size:16pt; font-weight:600; padding:10px;")
         layout.addWidget(title)
-        text = QLabel("A separate 3840 × 2160 window follows game_origin. Clicks pass through, it never activates, and its HUD is excluded from screen capture on supported Windows builds.")
+        text = QLabel("A separate window uses the profile's game resolution and game_origin. Clicks pass through, it never activates, and its HUD is excluded from screen capture on supported Windows builds.")
         text.setWordWrap(True)
         layout.addWidget(text)
         self.overlay_toggle = QCheckBox("Overlay visible")
@@ -439,14 +439,16 @@ class MainWindow(PreserveGameFocus, QMainWindow):
 
     def refresh_profile(self) -> None:
         self.profile.reload()
-        self.profile_badge.setText(f"PROFILE   {self.profile.path.parent.name}\n3840 × 2160 • local assets")
         data = self.profile.data
-        self.profile_summary.setText(f"{self.profile.path}\nResolution locked: 3840 × 2160    |    game_origin: {data.get('game_origin')}    |    counts_per_degree: {data.get('counts_per_degree')}")
+        resolution = " × ".join(map(str, data.get("resolution", [])))
+        self.profile_badge.setText(f"PROFILE   {self.profile.path.parent.name}\n{resolution} • local assets")
+        self.profile_summary.setText(f"{self.profile.path}\nGame capture: {resolution}    |    game_origin: {data.get('game_origin')}    |    counts_per_degree: {data.get('counts_per_degree')}")
         self.editor.blockSignals(True)
         self.editor.setPlainText(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
         self.editor.blockSignals(False)
         self.editing_dirty = False
         self.teacher.profile = self.profile
+        self.teacher.sync_profile()
         self.overlay.configure(self.profile.settings)
         while self.roi_layout.count():
             item = self.roi_layout.takeAt(0)
@@ -628,7 +630,7 @@ def main() -> int:
                     assert not window.start_button.isEnabled()
                     result = validate_profile(profile.path)
                     from gui.smoke import exercise_package
-                    checks = exercise_package(window, app)
+                    checks = exercise_package(window, app, destination)
                     window.preflight.show_result(result[0], result[1])
                     app.processEvents()
                     window.grab().save(str(destination / "MO2Fish-control.png"))

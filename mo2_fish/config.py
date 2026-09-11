@@ -46,7 +46,14 @@ class Settings:
         return (self.path.parent / value).resolve()
 
     def rect(self, name: str) -> Rect:
-        return Rect.parse(self["rois"][name], f"rois.{name}", tuple(self["resolution"]))
+        return Rect.parse(self["rois"][name], f"rois.{name}", self.resolution)
+
+    @property
+    def resolution(self) -> tuple[int, int]:
+        value = self.data.get("resolution")
+        if not isinstance(value, list) or len(value) != 2 or not all(type(v) is int and v >= 2 for v in value):
+            raise ConfigError("resolution must be [width, height], integers of at least 2 physical pixels")
+        return tuple(value)
 
     def required_assets(self) -> list[Path]:
         values = [v for v in self["templates"].values() if v]
@@ -81,7 +88,12 @@ class Settings:
                 errors.append(f"{prefix}: replace TODO")
 
         todo(self.data)
-        require(self["resolution"] == [3840, 2160], "resolution must be [3840, 2160]")
+        try:
+            bounds = self.resolution
+        except ConfigError as exc:
+            errors.append(str(exc))
+            bounds = (1, 1)
+        require(self.data.get("video_scale_mode", "fit") in ("fit", "stretch"), "video_scale_mode must be fit or stretch")
         scale = self["counts_per_degree"]
         require(isinstance(scale, (float, int)) and math.isfinite(float(scale)) and scale != 0,
                 "counts_per_degree: run tools/heading_calibrator.py; nonzero signed number required")
@@ -110,7 +122,7 @@ class Settings:
                     f"tasks.{name}: fish name, fight, precedence, or availability changed")
             for kind in ("hook", "bait"):
                 try:
-                    Rect.parse(task.get(f"{kind}_inventory_rect"), f"tasks.{name}.{kind}_inventory_rect", (3840, 2160))
+                    Rect.parse(task.get(f"{kind}_inventory_rect"), f"tasks.{name}.{kind}_inventory_rect", bounds)
                 except ConfigError as exc:
                     errors.append(str(exc))
         a, c = self["audio"], self["compass"]
@@ -157,14 +169,14 @@ class Settings:
                 require(isinstance(step, dict) and (('key' in step) != ('click' in step)), "logout step: choose key OR click")
                 if isinstance(step, dict) and "click" in step:
                     p = step["click"]
-                    require(isinstance(p, list) and len(p) == 2 and 0 <= p[0] < 3840 and 0 <= p[1] < 2160,
+                    require(isinstance(p, list) and len(p) == 2 and all(type(v) is int for v in p) and 0 <= p[0] < bounds[0] and 0 <= p[1] < bounds[1],
                             "logout.click must be a point within the game rectangle")
                 if isinstance(step, dict):
                     require(isinstance(step.get("wait_s", 0.7), (int, float)) and step.get("wait_s", 0.7) >= 0,
                             "logout.wait_s must be a nonnegative number")
         require(bool(self["logout"]["success_template"]), "logout.success_template is required")
         try:
-            Rect.parse(self["logout"]["success_roi"], "logout.success_roi", (3840, 2160))
+            Rect.parse(self["logout"]["success_roi"], "logout.success_roi", bounds)
         except ConfigError as exc:
             errors.append(str(exc))
         if assets:

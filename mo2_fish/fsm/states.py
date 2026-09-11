@@ -254,7 +254,7 @@ class AssistantFSM:
             for kind in ("hook", "bait"):
                 if self.vision.equipped(self.task, kind):
                     continue
-                rect = Rect.parse(task[f"{kind}_inventory_rect"], f"{kind}_inventory_rect", (3840, 2160))
+                rect = Rect.parse(task[f"{kind}_inventory_rect"], f"{kind}_inventory_rect", tuple(self.cfg["resolution"]))
                 def source_visible() -> bool:
                     return self.vision.store.match(self.screen.grab_rect(rect), task[f"{kind}_template"]).score >= self.cfg["vision"]["threshold"]
                 if not self.until(source_visible, 1.0, 2):
@@ -445,7 +445,7 @@ class AssistantFSM:
                 self.mouse.click(self.screen.screen_point(tuple(step["click"])))
             self.gate.sleep(float(step.get("wait_s", 0.7)))
         cfg = self.cfg["logout"]
-        rect = Rect.parse(cfg["success_roi"], "logout.success_roi", (3840, 2160))
+        rect = Rect.parse(cfg["success_roi"], "logout.success_roi", tuple(self.cfg["resolution"]))
         def logged_out() -> bool:
             result = self.vision.store.match(self.screen.grab_rect(rect), cfg["success_template"])
             return result.score >= self.cfg["vision"]["threshold"]

@@ -1,4 +1,4 @@
-"""Pick a physical-pixel ROI from a 4K game capture or saved screenshot."""
+"""Pick a physical-pixel ROI from a game capture or saved screenshot."""
 from __future__ import annotations
 
 import argparse
@@ -17,7 +17,7 @@ from vision.capture import ScreenCapture, enable_dpi_awareness
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path(__file__).resolve().parents[1] / "config.yaml")
-    parser.add_argument("--image", type=Path, help="Saved, unscaled 3840x2160 game screenshot")
+    parser.add_argument("--image", type=Path, help="Saved, unscaled screenshot matching the profile resolution")
     parser.add_argument("--save", type=Path, help="Save the selected native-resolution PNG crop")
     parser.add_argument("--name", default="compass", help="Name printed in the YAML snippet")
     parser.add_argument("--preview-width", type=int, default=1600)
@@ -29,7 +29,7 @@ def main() -> int:
         if image is None:
             raise ValueError(f"Cannot decode {args.image}")
     else:
-        print("Capturing the configured 4K game rectangle in 3 seconds. Focus the game now.")
+        print("Capturing the configured game rectangle in 3 seconds. Focus the game now.")
         import time
         time.sleep(3)
         capture = ScreenCapture(cfg)
@@ -37,8 +37,8 @@ def main() -> int:
             image = capture.grab_rect(Rect(0, 0, *cfg["resolution"]))
         finally:
             capture.close()
-    if image.shape[:2] != (2160, 3840):
-        raise ValueError("Expected an unscaled 3840x2160 game image")
+    if image.shape[:2] != tuple(reversed(cfg.resolution)):
+        raise ValueError(f"Expected an unscaled {cfg.resolution[0]}x{cfg.resolution[1]} game image")
     scale = min(1.0, max(320, args.preview_width) / image.shape[1])
     preview = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
     print("Drag a rectangle, Enter accepts, Esc cancels. Only the preview is resized.")

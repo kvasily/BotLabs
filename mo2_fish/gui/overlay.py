@@ -5,7 +5,7 @@ import ctypes as ct
 from ctypes import wintypes as wt
 import sys
 
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import QEvent, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
@@ -14,7 +14,22 @@ from config import Settings
 STYLE_BITS = 0x20 | 0x80000 | 0x08000000  # TRANSPARENT | LAYERED | NOACTIVATE
 
 
-def native_overlay(hwnd: int, origin: tuple[int, int]) -> bool:
+def enforce_physical_geometry(hwnd: int, origin: tuple[int, int], resolution: tuple[int, int]) -> None:
+    """Correct fractional-DPI rounding after Qt flushes its layered bitmap."""
+    user32 = ct.WinDLL("user32", use_last_error=True)
+    rect = wt.RECT()
+    user32.GetWindowRect.argtypes = [wt.HWND, ct.POINTER(wt.RECT)]
+    if not user32.GetWindowRect(hwnd, ct.byref(rect)):
+        raise ct.WinError(ct.get_last_error())
+    if (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top) != (*origin, *resolution):
+        user32.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ct.c_int, ct.c_int, ct.c_int, ct.c_int, wt.UINT]
+        # No activation, Z-order change or new paint request. The layered bitmap
+        # is already drawn; only its final physical boundary needs correcting.
+        if not user32.SetWindowPos(hwnd, None, *origin, *resolution, 0x10 | 0x4 | 0x8):
+            raise ct.WinError(ct.get_last_error())
+
+
+def native_overlay(hwnd: int, origin: tuple[int, int], resolution: tuple[int, int]) -> bool:
     if sys.platform != "win32":
         return False
     user32 = ct.WinDLL("user32", use_last_error=True)
@@ -24,7 +39,7 @@ def native_overlay(hwnd: int, origin: tuple[int, int]) -> bool:
     set_style.argtypes, set_style.restype = [wt.HWND, ct.c_int, ct.c_ssize_t], ct.c_ssize_t
     set_style(hwnd, -20, get_style(hwnd, -20) | STYLE_BITS)
     user32.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ct.c_int, ct.c_int, ct.c_int, ct.c_int, wt.UINT]
-    if not user32.SetWindowPos(hwnd, wt.HWND(-1), origin[0], origin[1], 3840, 2160, 0x10 | 0x20):
+    if not user32.SetWindowPos(hwnd, wt.HWND(-1), origin[0], origin[1], *resolution, 0x10 | 0x20):
         raise ct.WinError(ct.get_last_error())
     user32.SetWindowDisplayAffinity.argtypes = [wt.HWND, wt.DWORD]
     # Prevent HUD paint from becoming detector pixels in mss screenshots.
@@ -61,15 +76,32 @@ class Overlay(QWidget):
         if not isinstance(origin, list) or len(origin) != 2 or not all(type(v) is int for v in origin):
             origin = [0, 0]  # Display-only fallback. The original validator still rejects the profile.
         self.origin = tuple(origin)
-        self.setGeometry(*origin, 3840, 2160)
-        if self.isVisible():
-            self.capture_excluded = native_overlay(int(self.winId()), self.origin)
+        try:
+            self.resolution = cfg.resolution
+        except ValueError:
+            self.resolution = (3840, 2160)  # Display fallback; malformed profiles cannot Start.
+        if self.isVisible() and sys.platform == "win32":
+            # SetWindowPos uses physical pixels. A concurrent Qt setGeometry
+            # request uses logical pixels and can undo this size at 125/150% DPI.
+            self.capture_excluded = native_overlay(int(self.winId()), self.origin, self.resolution)
+        else:
+            self.setGeometry(*origin, *self.resolution)
         self.update()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
         if self.cfg:
-            self.capture_excluded = native_overlay(int(self.winId()), self.origin)
+            self.capture_excluded = native_overlay(int(self.winId()), self.origin, self.resolution)
+
+    def event(self, event):
+        result = super().event(event)
+        if (sys.platform == "win32" and event.type() == QEvent.Type.UpdateRequest and
+                getattr(self, "cfg", None) and self.isVisible()):
+            # Qt's layered-window flush rounds a logical width of 2560/1.5
+            # back to 2561 physical pixels, without a WM_WINDOWPOSCHANGING.
+            # UpdateRequest completes that flush before we restore the bounds.
+            enforce_physical_geometry(int(self.winId()), self.origin, self.resolution)
+        return result
 
     def set_snapshot(self, data: dict) -> None:
         self.telemetry = data
@@ -80,7 +112,10 @@ class Overlay(QWidget):
             return
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.scale(self.width() / 3840, self.height() / 2160)
+        if sys.platform == "win32":
+            p.scale(1 / self.devicePixelRatioF(), 1 / self.devicePixelRatioF())
+        else:
+            p.scale(self.width() / self.resolution[0], self.height() / self.resolution[1])
         p.setFont(QFont("Segoe UI", 11))
         active = self.ACTIVE.get(self.telemetry.get("state"), set())
         for name in sorted(self.enabled_rois):

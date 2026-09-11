@@ -349,6 +349,7 @@ class VideoTeacher(QWidget):
         self.profile, self.jobs = profile, jobs
         self.source = VideoSource()
         self.source.frame_ready.connect(self.on_frame)
+        self.source.metadata.connect(self.on_metadata)
         self.source.failed.connect(self.message)
         self.probe = LoopbackProbe()
         self.probe.clip.connect(self.on_audio)
@@ -358,6 +359,7 @@ class VideoTeacher(QWidget):
         self.position, self.frame_count, self.fps = 0, 0, 30.0
         self.crop_frozen = False
         self.pending_write = False
+        self.reported_size: tuple[int, int] | None = None
         layout = QVBoxLayout(self)
         top = QHBoxLayout()
         open_button, self.play = QPushButton("Open MP4 / MKV"), QPushButton("Play")
@@ -368,8 +370,34 @@ class VideoTeacher(QWidget):
         top.addWidget(self.play)
         top.addWidget(self.position_label, 1)
         layout.addLayout(top)
+        self.video_label = QLabel("Video: —")
+        layout.addWidget(self.video_label)
+        target = QHBoxLayout()
+        target.addWidget(QLabel("Game / monitor capture"))
+        self.resolution_preset = QComboBox()
+        for label, size in (("3840 × 2160", (3840, 2160)), ("2560 × 1440", (2560, 1440)),
+                            ("1920 × 1080", (1920, 1080)), ("Custom W × H", None)):
+            self.resolution_preset.addItem(label, size)
+        self.game_width, self.game_height = QSpinBox(), QSpinBox()
+        for spin in (self.game_width, self.game_height):
+            spin.setRange(2, 32768)
+            spin.valueChanged.connect(self.custom_dimensions)
+        self.resolution_preset.currentIndexChanged.connect(self.choose_preset)
+        self.scale_mode = QComboBox()
+        self.scale_mode.addItem("Fit (keep aspect)", "fit")
+        self.scale_mode.addItem("Stretch", "stretch")
+        self.apply_target = QPushButton("Apply target / mode")
+        self.apply_target.clicked.connect(self.apply_mapping)
+        for widget in (self.resolution_preset, self.game_width, QLabel("×"), self.game_height,
+                       QLabel("Mapping"), self.scale_mode, self.apply_target):
+            target.addWidget(widget)
+        layout.addLayout(target)
         self.canvas = FrameCanvas()
         layout.addWidget(self.canvas, 4)
+        self.cursor_info = QLabel("preview —  |  video —  |  game —")
+        self.cursor_info.setObjectName("muted")
+        self.canvas.cursor_changed.connect(self.cursor_info.setText)
+        layout.addWidget(self.cursor_info)
         self.timeline = QSlider(Qt.Orientation.Horizontal)
         self.timeline.setRange(0, 0)
         self.timeline.sliderMoved.connect(self.seek)
@@ -381,6 +409,7 @@ class VideoTeacher(QWidget):
         row = QHBoxLayout()
         self.role, self.box_mode, self.task = QComboBox(), QComboBox(), QComboBox()
         self.role.addItems(ROLES)
+        self.role.currentIndexChanged.connect(self.show_saved_roi)
         self.box_mode.addItems(["Outer search ROI", "Inner template crop"])
         self.box_mode.currentIndexChanged.connect(lambda i: setattr(self.canvas, "mode", "inner" if i else "outer"))
         self.task.addItem("Bassle", "bassle")
@@ -391,7 +420,7 @@ class VideoTeacher(QWidget):
         for item in (self.role, self.task, self.box_mode, save, roi_only):
             row.addWidget(item)
         layout.addLayout(row)
-        self.crop_info = QLabel("Outer = search area • Inner = tightly cropped template; both use native frame pixels")
+        self.crop_info = QLabel("Outer = search area • Inner = template • PNGs and YAML are saved in game pixels")
         self.crop_info.setObjectName("muted")
         self.canvas.selection_changed.connect(self.show_box)
         self.canvas.selection_started.connect(self.freeze_frame)
@@ -433,6 +462,112 @@ class VideoTeacher(QWidget):
         layout.addWidget(self.audio_info)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.next_frame)
+        self.sync_profile()
+
+    def sync_profile(self) -> None:
+        size = self.profile.data.get("resolution", [3840, 2160])
+        if not isinstance(size, list) or len(size) != 2 or not all(type(v) is int and 2 <= v <= 32768 for v in size):
+            size = [3840, 2160]  # Display fallback only; validation rejects malformed YAML.
+        for spin, value in zip((self.game_width, self.game_height), size):
+            spin.blockSignals(True)
+            spin.setValue(value)
+            spin.blockSignals(False)
+        self.resolution_preset.blockSignals(True)
+        match = next((i for i in range(3) if tuple(self.resolution_preset.itemData(i)) == tuple(size)), 3)
+        self.resolution_preset.setCurrentIndex(match)
+        self.resolution_preset.blockSignals(False)
+        mode = self.profile.data.get("video_scale_mode", "fit")
+        self.scale_mode.setCurrentIndex(1 if mode == "stretch" else 0)
+        self.canvas.game_size, self.canvas.scale_mode = tuple(size), mode if mode in ("fit", "stretch") else "fit"
+        self.show_saved_roi()
+        self.update_resolution_info()
+        self.canvas.update()
+
+    def choose_preset(self, index: int) -> None:
+        size = self.resolution_preset.itemData(index)
+        if size:
+            for spin, value in zip((self.game_width, self.game_height), size):
+                spin.blockSignals(True)
+                spin.setValue(value)
+                spin.blockSignals(False)
+
+    def custom_dimensions(self) -> None:
+        self.resolution_preset.blockSignals(True)
+        self.resolution_preset.setCurrentIndex(3)
+        self.resolution_preset.blockSignals(False)
+
+    def apply_mapping(self) -> None:
+        resolution = (self.game_width.value(), self.game_height.value())
+        mode = self.scale_mode.currentData()
+        old = tuple(self.profile.data["resolution"])
+        if resolution == old and mode == self.profile.data.get("video_scale_mode", "fit"):
+            return
+        rescale = False
+        existing = any(is_rect(value) for value in self.profile.data.get("rois", {}).values())
+        existing |= any(is_rect(task.get(key)) for task in self.profile.data.get("tasks", {}).values()
+                        for key in ("hook_inventory_rect", "bait_inventory_rect"))
+        existing |= is_rect(self.profile.data.get("logout", {}).get("success_roi"))
+        existing |= any(path.suffix.lower() == ".png" and path.is_file() for path in self.profile.settings.required_assets())
+        if resolution != old and (existing or self.canvas.outer is not None):
+            dialog = QMessageBox(self)
+            dialog.setWindowTitle("Change game capture resolution")
+            dialog.setText(f"Rescale existing ROIs/templates from {old[0]} × {old[1]} → {resolution[0]} × {resolution[1]}?")
+            dialog.setInformativeText("Rescale keeps the original YAML and PNGs. Keeping existing pixels changes only the target; inspect your assets and Validate again. Current video selections stay attached to the video.")
+            yes = dialog.addButton("Rescale existing assets", QMessageBox.ButtonRole.AcceptRole)
+            keep = dialog.addButton("Keep existing pixels", QMessageBox.ButtonRole.DestructiveRole)
+            dialog.addButton(QMessageBox.StandardButton.Cancel)
+            dialog.setDefaultButton(yes)
+            dialog.exec()
+            if dialog.clickedButton() not in (yes, keep):
+                self.sync_profile()
+                return
+            rescale = dialog.clickedButton() == yes
+        self.change_target(resolution, mode, rescale)
+
+    def change_target(self, resolution: tuple[int, int], mode: str, rescale: bool) -> None:
+        self.authoring.emit()
+        profile = self.profile
+        def work():
+            if rescale:
+                return rescale_profile(profile, resolution, mode)
+            data = copy.deepcopy(profile.data)
+            data["resolution"], data["video_scale_mode"] = list(resolution), mode
+            profile.write(data)
+            return 0
+        def done(count):
+            self.sync_profile()
+            self.show_box()
+            self.message.emit(f"Game target saved; {count} PNGs rescaled. Inspect ROIs and Validate again.")
+        self.write_job(work, done)
+
+    def on_metadata(self, width: int, height: int) -> None:
+        self.reported_size = (width, height)
+
+    def update_resolution_info(self) -> None:
+        if self.canvas.frame is None:
+            return
+        mapping = self.canvas.mapping()
+        vw, vh, gw, gh = mapping.video_w, mapping.video_h, mapping.game_w, mapping.game_h
+        label = f"Video: {vw} × {vh}"
+        if self.reported_size and self.reported_size != (vw, vh):
+            label += f" (decoded frame)  •  Container: {self.reported_size[0]} × {self.reported_size[1]}; using decoded pixels"
+        self.video_label.setText(label)
+        sx, sy, _, _ = mapping.game_transform
+        scale = f"×{sx:.2f}" if abs(sx - sy) < 1e-9 else f"×{sx:.2f} horizontal, ×{sy:.2f} vertical"
+        text = (f"Crops will be scaled from {vw}×{vh} → {gw}×{gh} ({scale})."
+                if (vw, vh) != (gw, gh) else f"Video and game match: {gw}×{gh}. PNGs keep 1:1 pixels.")
+        if mapping.aspect_mismatch:
+            text += " ASPECT MISMATCH • " + ("Fit centers the video; game padding has no source pixels." if mapping.mode == "fit" else "Stretch changes image proportions.")
+        self.warning.setText(text + " Runtime always uses the live game capture.")
+        self.warning.setStyleSheet("color: #ff7f8f" if mapping.aspect_mismatch else "color: #ffc36a" if (vw, vh) != (gw, gh) else "color: #5ce0b3")
+
+    def show_saved_roi(self) -> None:
+        key = ROLES[self.role.currentText()][0]
+        value = self.profile.data
+        for part in key.split("."):
+            value = value.get(part) if isinstance(value, dict) else None
+        self.canvas.saved_roi = tuple(value) if is_rect(value) else None
+        self.canvas.update()
 
     def open_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Open recording", "", "Recordings (*.mp4 *.mkv *.avi *.mov)")
@@ -451,12 +586,12 @@ class VideoTeacher(QWidget):
         self.timeline.setRange(0, max(0, count - 1))
         self.timeline.setValue(index)
         self.position_label.setText(f"{index / fps:,.2f}s   /   {count / fps:,.2f}s   ·   {frame.shape[1]} × {frame.shape[0]}")
-        if frame.shape[:2] != (2160, 3840):
-            self.warning.setText("NON-4K SOURCE • Boxes map through preview letterboxing to 3840×2160 YAML coordinates. PNGs keep native source pixels; recapture at 4K before live matching.")
-            self.warning.setStyleSheet("color: #ffc36a")
-        else:
-            self.warning.setText("NATIVE 4K • Video authoring only. Runtime perception remains the live screen.")
-            self.warning.setStyleSheet("color: #5ce0b3")
+        self.update_resolution_info()
+        size = [frame.shape[1], frame.shape[0]]
+        if self.profile.data.get("video_source_resolution") != size and not self.pending_write:
+            self.authoring.emit()
+            profile = self.profile
+            self.write_job(lambda: profile.patch("video_source_resolution", size), lambda _: None)
 
     def toggle_play(self) -> None:
         if self.timer.isActive():
@@ -477,7 +612,12 @@ class VideoTeacher(QWidget):
     def show_box(self) -> None:
         self.timer.stop()
         self.play.setText("Play")
-        self.crop_info.setText(f"Native pixels   •   ROI {self.canvas.outer}   •   Template {self.canvas.inner or 'outer box'}")
+        try:
+            box = self.canvas.mapping().video_to_game_rect(*self.canvas.outer) if self.canvas.outer else None
+            inner = self.canvas.mapping().video_to_game_rect(*(self.canvas.inner or self.canvas.outer)) if self.canvas.outer else None
+            self.crop_info.setText(f"Video ROI {self.canvas.outer}  →  Game ROI {box}  •  Game template {inner[2:] if inner else '—'}  •  Dashed blue = saved ROI")
+        except ValueError as exc:
+            self.crop_info.setText(str(exc))
 
     def freeze_frame(self) -> None:
         self.crop_frozen = True
@@ -503,9 +643,11 @@ class VideoTeacher(QWidget):
             self.message.emit("Wait for the current asset export to finish.")
             return
         self.pending_write = True
+        self.setEnabled(False)
         self.busy_changed.emit(True)
         def finish(value=None, error: str | None = None) -> None:
             self.pending_write = False
+            self.setEnabled(True)
             self.busy_changed.emit(False)
             if error:
                 self.message.emit(error)

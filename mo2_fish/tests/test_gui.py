@@ -131,14 +131,15 @@ class AuthoringTests(unittest.TestCase):
         self.assertEqual(FrameMapping(1920, 1080, 960, 540).config_box((100, 50, 80, 40)), [200, 100, 160, 80])
         self.assertEqual(FrameMapping(640, 480, 640, 480).config_box((0, 0, 640, 480)), [480, 0, 2880, 2160])
 
-    def test_fake_frame_crop_saves_native_pixels_and_existing_schema(self) -> None:
+    def test_fake_frame_crop_saves_game_pixels_and_existing_schema(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             _, profile = profile_at(directory)
             frame = np.random.default_rng(21).integers(0, 255, (1080, 1920, 3), dtype=np.uint8)
             outer, inner = (100, 50, 120, 80), (110, 60, 20, 30)
             output = save_frame_role(profile, frame, outer, inner, "hit_marker")
             decoded = cv2.imdecode(np.fromfile(output, dtype=np.uint8), cv2.IMREAD_COLOR)
-            self.assertTrue(np.array_equal(decoded, frame[60:90, 110:130]))
+            expected = cv2.resize(frame[60:90, 110:130], (40, 60), interpolation=cv2.INTER_CUBIC)
+            self.assertTrue(np.array_equal(decoded, expected))
             self.assertEqual(load_config(profile.path)["rois"]["hit_marker"], [200, 100, 240, 160])
             self.assertEqual(profile.data["templates"]["hit_marker"], "templates/hit_marker.png")
             with self.assertRaisesRegex(ValueError, "inside"):

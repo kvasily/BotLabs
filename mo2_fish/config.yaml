@@ -1,5 +1,7 @@
 # All rectangles: [x, y, width, height], physical pixels relative to game_origin.
 resolution: [3840, 2160]
+video_source_resolution: null  # Informational; decoded dimensions of last teacher file.
+video_scale_mode: fit          # fit preserves aspect; stretch explicitly changes proportions.
 game_origin: [0, 0]
 window_title_contains: Mortal Online 2
 audio_device_name: TODO

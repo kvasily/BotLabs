@@ -37,7 +37,7 @@ class SpaceMap:
 
     @property
     def preview_rect(self) -> tuple[float, float, float, float]:
-        w, h = self.video_w * self.scale_pv, self.video_h * self.scale_pv
+        w, h = min(self.preview_w, self.video_w * self.scale_pv), min(self.preview_h, self.video_h * self.scale_pv)
         return (self.preview_w - w) / 2, (self.preview_h - h) / 2, w, h
 
     @property
@@ -53,7 +53,7 @@ class SpaceMap:
         sx, sy = self.game_w / self.video_w, self.game_h / self.video_h
         if self.mode == "fit":
             sx = sy = min(sx, sy)
-        return sx, sy, (self.game_w - self.video_w * sx) / 2, (self.game_h - self.video_h * sy) / 2
+        return sx, sy, max(0, (self.game_w - self.video_w * sx) / 2), max(0, (self.game_h - self.video_h * sy) / 2)
 
     @property
     def aspect_mismatch(self) -> bool:
