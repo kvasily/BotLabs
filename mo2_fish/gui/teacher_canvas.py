@@ -66,6 +66,7 @@ class FrameCanvas(QWidget):
         if self.image is None:
             p.setPen(QColor("#71859b"))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "OPEN A RECORDING\nSelect a role, then draw its rectangle")
+            self.paint_fix_border(p)
             return
         mapping = self.mapping()
         p.drawImage(QRectF(*mapping.preview_rect), self.image)
@@ -81,6 +82,13 @@ class FrameCanvas(QWidget):
             x, y, w, h = self.outer
             p.setPen(QPen(self.outline_color(True), 2))
             p.drawRect(QRectF(left+x*mapping.scale_pv, top+y*mapping.scale_pv, w*mapping.scale_pv, h*mapping.scale_pv))
+        self.paint_fix_border(p)
+
+    def paint_fix_border(self, painter):
+        if self.property("fixHighlighted"):
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor("#ff555f"), 2))
+            painter.drawRect(self.rect().adjusted(1, 1, -2, -2))
 
     def mousePressEvent(self, event):
         if self.image is not None and event.button() == Qt.MouseButton.LeftButton:
@@ -111,4 +119,3 @@ class FrameCanvas(QWidget):
             self.mouseMoveEvent(event)
             self.start_point = None
             self.selection_finished.emit()
-

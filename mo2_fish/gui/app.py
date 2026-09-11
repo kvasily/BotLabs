@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDia
                                QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
                                QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox,
                                QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QSplitter,
-                               QTabWidget, QVBoxLayout, QWidget)
+                               QTabWidget, QTreeWidget, QVBoxLayout, QWidget)
 
 from audio.loopback import devices
 from gui.jobs import Jobs
@@ -28,6 +28,7 @@ from gui.preflight_view import PreflightView, validate_profile
 from gui.profiles import Profile, ProfileStore, app_root, fingerprint
 from gui.runtime import RuntimeController
 from gui.video_teacher import VideoTeacher
+from gui.field_help import HelpButton, help_label
 from tools.heading_calibrator import save_calibration
 from vision.capture import enable_dpi_awareness
 
@@ -96,8 +97,8 @@ class CalibrationDialog(PreserveGameFocus, QDialog):
         self.heading = QDoubleSpinBox()
         self.heading.setRange(0, 359.99)
         self.heading.setDecimals(2)
-        form.addRow("Positive mouse counts", self.counts)
-        form.addRow("Observed heading", self.heading)
+        form.addRow(help_label("Positive mouse counts", "calibration.counts"), self.counts)
+        form.addRow(help_label("Observed heading", "calibration.heading"), self.heading)
         layout.addLayout(form)
         row = QHBoxLayout()
         self.move_button = QPushButton("Send test movement")
@@ -208,8 +209,10 @@ class MainWindow(PreserveGameFocus, QMainWindow):
         self.teacher.message.connect(self.show_message)
         self.teacher.busy_changed.connect(self.authoring_busy)
         self.tabs.addTab(self.teacher, "Teach from video")
-        self.tabs.addTab(self.make_audio_tab(), "Audio device")
-        self.tabs.addTab(self.make_profile_tab(), "Profile")
+        self.audio_tab = self.make_audio_tab()
+        self.profile_tab = self.make_profile_tab()
+        self.tabs.addTab(self.audio_tab, "Audio device")
+        self.tabs.addTab(self.profile_tab, "Profile")
         self.tabs.addTab(self.make_overlay_tab(), "Overlay")
         from gui.audio_clips import AudioClips
         self.audio_clips = AudioClips()
@@ -221,6 +224,8 @@ class MainWindow(PreserveGameFocus, QMainWindow):
         self.message.setObjectName("message")
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
+        from gui.fix_navigation import SetupNavigation
+        self.setup_navigation = SetupNavigation(self)
         self.refresh_profile()
         self.update_controls()
         if observe:
@@ -244,7 +249,10 @@ class MainWindow(PreserveGameFocus, QMainWindow):
         right.addWidget(self.meters)
         self.overlay_check = QCheckBox("Show click-through overlay")
         self.overlay_check.toggled.connect(self.toggle_overlay)
-        right.addWidget(self.overlay_check)
+        overlay_row = QHBoxLayout()
+        overlay_row.addWidget(self.overlay_check)
+        overlay_row.addWidget(HelpButton("overlay.visible"))
+        right.addLayout(overlay_row)
         right.addStretch()
         columns.addLayout(right, 2)
         layout.addLayout(columns, 1)
@@ -255,7 +263,10 @@ class MainWindow(PreserveGameFocus, QMainWindow):
         self.override = QLineEdit()
         self.override.setPlaceholderText("Optional: type OVERRIDE to request a fresh validation at Start; missing assets still block")
         self.override.textChanged.connect(self.update_controls)
-        layout.addWidget(self.override)
+        override_row = QHBoxLayout()
+        override_row.addWidget(self.override, 1)
+        override_row.addWidget(HelpButton("override"))
+        layout.addLayout(override_row)
         return tab
 
     def make_audio_tab(self) -> QWidget:
@@ -275,6 +286,7 @@ class MainWindow(PreserveGameFocus, QMainWindow):
         refresh.clicked.connect(self.refresh_devices)
         use.clicked.connect(self.use_device)
         row.addWidget(self.devices_combo, 1)
+        row.addWidget(HelpButton("audio_device_name"))
         row.addWidget(refresh)
         row.addWidget(use)
         layout.addLayout(row)
@@ -300,6 +312,7 @@ class MainWindow(PreserveGameFocus, QMainWindow):
         calibrate.clicked.connect(self.calibrate)
         for button in (load, save, save_as, calibrate):
             row.addWidget(button)
+        row.addWidget(HelpButton("counts_per_degree"))
         row.addStretch()
         layout.addLayout(row)
         self.profile_summary = QLabel()
@@ -312,7 +325,26 @@ class MainWindow(PreserveGameFocus, QMainWindow):
         self.editor = QPlainTextEdit()
         self.editor.setFont(QFont("Consolas", 10))
         self.editor.textChanged.connect(self.yaml_changed)
-        layout.addWidget(self.editor, 1)
+        self.field_search = QLineEdit()
+        self.field_search.setPlaceholderText("Find a setting…")
+        self.field_list = QTreeWidget()
+        self.field_list.setHeaderLabels(["Setting", "?"])
+        self.field_list.setRootIsDecorated(False)
+        self.field_list.header().setStretchLastSection(False)
+        self.field_list.setColumnWidth(0, 265)
+        self.field_list.setColumnWidth(1, 30)
+        browser = QWidget()
+        browser_layout = QVBoxLayout(browser)
+        browser_layout.setContentsMargins(0, 0, 0, 0)
+        browser_layout.addWidget(self.field_search)
+        browser_layout.addWidget(self.field_list)
+        browser.setMinimumWidth(310)
+        split = QSplitter()
+        split.addWidget(browser)
+        split.addWidget(self.editor)
+        split.setStretchFactor(1, 1)
+        split.setSizes([320, 800])
+        layout.addWidget(split, 1)
         return tab
 
     def make_overlay_tab(self) -> QWidget:
@@ -329,8 +361,12 @@ class MainWindow(PreserveGameFocus, QMainWindow):
         self.labels_check = QCheckBox("Show ROI labels")
         self.labels_check.setChecked(True)
         self.labels_check.toggled.connect(lambda value: (setattr(self.overlay, "labels", value), self.overlay.update()))
-        layout.addWidget(self.overlay_toggle)
-        layout.addWidget(self.labels_check)
+        for widget, key in ((self.overlay_toggle, "overlay.visible"), (self.labels_check, "overlay.labels")):
+            row = QHBoxLayout()
+            row.addWidget(widget)
+            row.addWidget(HelpButton(key))
+            row.addStretch()
+            layout.addLayout(row)
         self.roi_container = QWidget()
         self.roi_layout = QVBoxLayout(self.roi_container)
         scroll = QScrollArea()
@@ -444,6 +480,8 @@ class MainWindow(PreserveGameFocus, QMainWindow):
         self.jobs.run(lambda: validate_profile(path), done, self.show_message)
 
     def refresh_profile(self) -> None:
+        if hasattr(self, "setup_navigation"):
+            self.setup_navigation.highlight.clear()
         self.profile.reload()
         data = self.profile.data
         resolution = " × ".join(map(str, data.get("resolution", [])))
@@ -456,6 +494,8 @@ class MainWindow(PreserveGameFocus, QMainWindow):
         self.teacher.profile = self.profile
         self.teacher.sync_profile()
         self.audio_clips.refresh(self.profile)
+        if hasattr(self, "setup_navigation"):
+            self.setup_navigation.refresh_targets()
         self.overlay.configure(self.profile.settings)
         while self.roi_layout.count():
             item = self.roi_layout.takeAt(0)
@@ -465,7 +505,13 @@ class MainWindow(PreserveGameFocus, QMainWindow):
             checkbox = QCheckBox(f"{name}   ·   {rect}")
             checkbox.setChecked(True)
             checkbox.toggled.connect(lambda value, n=name: self.toggle_roi(n, value))
-            self.roi_layout.addWidget(checkbox)
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.addWidget(checkbox)
+            row_layout.addWidget(HelpButton(f"rois.{name}"))
+            row_layout.addStretch()
+            self.roi_layout.addWidget(row)
         self.roi_layout.addStretch()
         self.update_controls()
 

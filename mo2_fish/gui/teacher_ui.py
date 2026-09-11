@@ -20,6 +20,7 @@ from gui.teacher_canvas import FrameCanvas
 from gui.teacher_document import GROUPS, TeacherDocument
 from gui.teacher_player import FilePlayer, ScrubState, SeekSlider
 from gui.teacher_panels import AudioToolsSplitter
+from gui.field_help import HelpButton, help_label
 from gui.video_teacher import Waveform, export_audio, extract_audio
 
 
@@ -77,7 +78,7 @@ class VideoTeacher(QWidget):
         self.video_label = QLabel("Video: —")
         layout.addWidget(self.video_label)
         target = QHBoxLayout()
-        target.addWidget(QLabel("Game / monitor capture"))
+        target.addWidget(help_label("Game / monitor capture", "resolution"))
         self.resolution_preset = QComboBox()
         for name, size in (("3840 × 2160", (3840, 2160)), ("2560 × 1440", (2560, 1440)),
                            ("1920 × 1080", (1920, 1080)), ("Custom W × H", None)):
@@ -96,12 +97,17 @@ class VideoTeacher(QWidget):
         for widget in (self.resolution_preset, self.game_width, QLabel("×"), self.game_height,
                        self.scale_mode, self.apply_target):
             target.addWidget(widget)
+        target.addWidget(HelpButton("video_scale_mode"))
         target.addStretch()
         layout.addLayout(target)
 
         split = QSplitter()
         self.role_list = QTreeWidget()
         self.role_list.setHeaderHidden(True)
+        self.role_list.setColumnCount(2)
+        self.role_list.header().setStretchLastSection(False)
+        self.role_list.setColumnWidth(0, 205)
+        self.role_list.setColumnWidth(1, 26)
         self.role_list.setMinimumWidth(175)
         self.role_list.setMaximumWidth(260)
         self.role_items = {}
@@ -113,6 +119,7 @@ class VideoTeacher(QWidget):
                 item = QTreeWidgetItem(group, [label])
                 item.setData(0, Qt.ItemDataRole.UserRole, role)
                 self.role_items[role] = item
+                self.role_list.setItemWidget(item, 1, HelpButton(f"rois.{role}"))
             group.setExpanded(True)
         self.role_list.currentItemChanged.connect(self.select_role)
         split.addWidget(self.role_list)
@@ -144,6 +151,7 @@ class VideoTeacher(QWidget):
         bar.addWidget(self.timeline, 1)
         for widget in (self.position_label, self.mute, self.gear):
             bar.addWidget(widget)
+        bar.addWidget(HelpButton("teacher.playback"))
         picture_layout.addLayout(bar)
         split.addWidget(picture)
         split.setStretchFactor(1, 1)
@@ -175,6 +183,7 @@ class VideoTeacher(QWidget):
         self.window_s.setValue(15)
         self.window_s.setSuffix(" s waveform")
         audio.addWidget(self.window_s)
+        audio.addWidget(HelpButton("teacher.waveform_window"))
         audio_layout.addLayout(audio)
         self.wave = Waveform()
         self.wave.setMinimumHeight(70)
@@ -192,9 +201,13 @@ class VideoTeacher(QWidget):
             button.clicked.connect(callback)
             trim.addWidget(button)
             trim.addWidget(self.in_s if label.startswith("In") else self.out_s)
+            trim.addWidget(HelpButton("teacher.in" if label.startswith("In") else "teacher.out"))
         self.audio_role = QComboBox()
         self.audio_role.addItems(["splash", "bubble", "tension", "quest_complete", "catch", "ignore"])
         trim.addWidget(self.audio_role)
+        role_help = HelpButton("audio.templates.splash")
+        self.audio_role.currentTextChanged.connect(lambda role: setattr(role_help, "key", f"audio.templates.{role}"))
+        trim.addWidget(role_help)
         for label, callback in (("Preview selection", self.preview_audio), ("Export 48 kHz WAV", self.save_audio)):
             button = QPushButton(label)
             button.clicked.connect(callback)
