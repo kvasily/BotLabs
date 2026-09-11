@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import copy
+import logging
 from pathlib import Path
+import tempfile
 
 import numpy as np
 from PySide6.QtCore import QEvent, Qt, Signal
@@ -17,6 +19,7 @@ from gui.profiles import Profile, ProfileStore
 from gui.teacher_canvas import FrameCanvas
 from gui.teacher_document import GROUPS, TeacherDocument
 from gui.teacher_player import FilePlayer, ScrubState, SeekSlider
+from gui.teacher_panels import AudioToolsSplitter
 from gui.video_teacher import Waveform, export_audio, extract_audio
 
 
@@ -37,8 +40,11 @@ class VideoTeacher(QWidget):
         self.document = TeacherDocument(profile)
         self.pending_write = False
         self.video_path = None
+        self._video_profile = None
+        self._redrawing_role = None
         self.reported_size = None
         self.crop_frozen = False
+        self.draw_frame = None
         self.position, self.duration_ms = 0, 0
         self.scrub = ScrubState()
         self.skip_seconds = 5
@@ -141,15 +147,21 @@ class VideoTeacher(QWidget):
         picture_layout.addLayout(bar)
         split.addWidget(picture)
         split.setStretchFactor(1, 1)
-        layout.addWidget(split, 4)
+        video_panel = QWidget()
+        video_layout = QVBoxLayout(video_panel)
+        video_layout.setContentsMargins(0, 0, 0, 0)
+        video_layout.addWidget(split, 1)
         self.cursor_info = QLabel("preview —  |  video —  |  game —")
         self.canvas.cursor_changed.connect(self.cursor_info.setText)
-        layout.addWidget(self.cursor_info)
+        video_layout.addWidget(self.cursor_info)
         self.warning = QLabel("Video authoring only. Runtime uses the live game capture.")
         self.warning.setWordWrap(True)
-        layout.addWidget(self.warning)
+        video_layout.addWidget(self.warning)
         self.crop_info = QLabel("Select a role and draw. Green = selected; red = other roles. Save commits all dirty boxes.")
-        layout.addWidget(self.crop_info)
+        video_layout.addWidget(self.crop_info)
+        audio_panel = QWidget()
+        audio_layout = QVBoxLayout(audio_panel)
+        audio_layout.setContentsMargins(0, 0, 0, 0)
         audio = QHBoxLayout()
         for label, callback in (("Waveform at playhead", self.load_video_audio), ("Open audio file", self.open_audio)):
             button = QPushButton(label)
@@ -163,11 +175,11 @@ class VideoTeacher(QWidget):
         self.window_s.setValue(15)
         self.window_s.setSuffix(" s waveform")
         audio.addWidget(self.window_s)
-        layout.addLayout(audio)
+        audio_layout.addLayout(audio)
         self.wave = Waveform()
         self.wave.setMinimumHeight(70)
         self.wave.selection.connect(self.wave_selection)
-        layout.addWidget(self.wave, 1)
+        audio_layout.addWidget(self.wave, 1)
         trim = QHBoxLayout()
         self.in_s, self.out_s = QDoubleSpinBox(), QDoubleSpinBox()
         for spin in (self.in_s, self.out_s):
@@ -186,9 +198,11 @@ class VideoTeacher(QWidget):
             button = QPushButton(label)
             button.clicked.connect(callback)
             trim.addWidget(button)
-        layout.addLayout(trim)
+        audio_layout.addLayout(trim)
         self.audio_info = QLabel("Mark In / Out while listening. Keep detector clips under one second; tension 40–120 ms.")
-        layout.addWidget(self.audio_info)
+        audio_layout.addWidget(self.audio_info)
+        self.audio_splitter = AudioToolsSplitter(video_panel, audio_panel)
+        layout.addWidget(self.audio_splitter, 1)
         self.shortcuts = []
         for key, callback in ((Qt.Key.Key_Space, self.toggle_play), (Qt.Key.Key_Left, lambda: self.skip(-1)),
                               (Qt.Key.Key_Right, lambda: self.skip(1))):
@@ -254,6 +268,7 @@ class VideoTeacher(QWidget):
         if answer == QMessageBox.StandardButton.Save:
             return self.save_document()
         if answer == QMessageBox.StandardButton.Discard:
+            self._redrawing_role = None
             self.document.load(self.document.profile)
             self.canvas.game_size, self.canvas.scale_mode = self.document.resolution, self.document.mode
             self.refresh_boxes()
@@ -263,6 +278,7 @@ class VideoTeacher(QWidget):
     def select_role(self, item, previous=None):
         role = item.data(0, Qt.ItemDataRole.UserRole) if item else None
         if role and hasattr(self, "canvas"):
+            self._redrawing_role = None
             self.canvas.active_role = role
             self.canvas.outer = None
             self.refresh_boxes()
@@ -270,24 +286,39 @@ class VideoTeacher(QWidget):
     def refresh_boxes(self):
         self.canvas.role_boxes = self.document.rects()
         self.canvas.update()
-        self.document_label.setText(f"{self.profile.path.parent.name}  {'● Unsaved changes' if self.document.dirty else 'Saved'}")
+        self.document_label.setText(f"{self.document.profile.path.parent.name}  {'● Unsaved changes' if self.document.dirty else 'Saved'}")
+        self.document_label.setToolTip(str(self.document.profile.path))
         for role, item in self.role_items.items():
+            label = {"confirm_button": "confirm", "turn_in_button": "turn_in"}.get(role, role)
+            marked = role in self.canvas.role_boxes or role == self._redrawing_role
+            item.setText(0, f"✓ {label}" if marked else label)
             item.setToolTip(0, str(self.canvas.role_boxes.get(role, "Draw this role")))
 
     def begin_draw(self):
         self.source.pause()
         self.crop_frozen = True
+        self.draw_frame = self.canvas.frame
         self.authoring.emit()
+        self._redrawing_role = self.canvas.active_role if self.canvas.active_role in self.document.rects() else None
         self.document.begin(self.canvas.active_role)
         self.refresh_boxes()
 
     def finish_draw(self):
         try:
-            self.document.replace(self.canvas.active_role, self.canvas.frame, self.canvas.outer)
+            frame = self.draw_frame if self.draw_frame is not None else self.canvas.frame
+            if frame is None:
+                raise ValueError("No decoded BGR frame available; pause or seek the video and redraw this role.")
+            if self.canvas.outer is None:
+                raise ValueError("No rectangle selected; drag to draw this role.")
+            self.document.replace(self.canvas.active_role, frame, self.canvas.outer)
+            self._redrawing_role = None
             self.refresh_boxes()
             self.show_box()
         except Exception as exc:
-            self.message.emit(str(exc))
+            self._redrawing_role = None
+            self.refresh_boxes()
+            logging.exception("Teacher draw could not be stored")
+            self.message.emit(f"Draw not stored: {exc}")
 
     def show_box(self):
         try:
@@ -297,6 +328,8 @@ class VideoTeacher(QWidget):
             self.crop_info.setText(str(exc))
 
     def sync_profile(self):
+        if self._video_profile is not self.profile:
+            self._redrawing_role = None
         if self.profile.path != self.document.profile.path and not self._switching:
             requested = self.profile
             if not self.maybe_save():
@@ -319,6 +352,9 @@ class VideoTeacher(QWidget):
         self.canvas.game_size, self.canvas.scale_mode = self.document.resolution, self.document.mode
         self.refresh_boxes()
         self.update_resolution_info()
+        if self._video_profile is not self.profile:
+            self._video_profile = self.profile
+            self.restore_video()
 
     def activate_profile(self, profile):
         # Reuse the existing shell's YAML/profile hooks; no engine or overlay
@@ -338,47 +374,74 @@ class VideoTeacher(QWidget):
 
     def save_document(self):
         if self.pending_write:
+            self.message.emit("Wait for the current file operation to finish.")
             return False
-        if getattr(self.window(), "editing_dirty", False):
-            self.message.emit("Save the Profile tab's YAML edits first; your teacher boxes stay in memory.")
-            return False
-        self.authoring.emit()
-        # Crops are small; staging and PNG encoding run through the same worker
-        # queue as other exports. A nested Qt loop keeps Save-on-close responsive.
-        from PySide6.QtCore import QEventLoop
-        loop = QEventLoop(self)
-        result = []
+        if self.video_path is not None:
+            self.document.set_video(self.video_path)
+        if not self.document.dirty and not getattr(self.window(), "editing_dirty", False):
+            self.message.emit(f"Nothing to commit: {self.document.profile.path}")
+            return True
+        return self.commit_document()
+
+    def editor_changes(self):
+        """Flush valid editor text, preserving an invalid draft without blocking crops."""
+        host = self.window()
+        if host is self or not getattr(host, "editing_dirty", False):
+            return None, None
+        if host.profile.path != self.document.profile.path:
+            # During a profile switch the editor belongs to the incoming file.
+            return None, None
+        try:
+            return host.parsed_editor(), None
+        except Exception:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False,
+                                             dir=self.document.profile.path.parent,
+                                             prefix="unsaved-editor-", suffix=".txt") as draft:
+                draft.write(host.editor.toPlainText())
+            return None, Path(draft.name)
+
+    def commit_document(self, name=None):
+        # Small crops commit synchronously: Save-on-close gets a real Profile or
+        # an exception, never a missing worker result or an unfinished Qt loop.
         self.pending_write = True
         self.setEnabled(False)
         self.source.pause()
+        self.authoring.emit()
         self.busy_changed.emit(True)
-        def complete(value=None, error=None):
-            result.append((value, error))
-            loop.quit()
-        self.jobs.run(self.document.save, complete, lambda error: complete(error=error))
-        if not result:
-            loop.exec()
-        self.pending_write = False
-        self.setEnabled(True)
-        self.busy_changed.emit(False)
-        if result[0][1]:
-            self.message.emit(result[0][1])
+        error, saved, draft = None, None, None
+        try:
+            data, draft = self.editor_changes()
+            if self.video_path is not None:
+                self.document.set_video(self.video_path)
+            saved = (self.document.save_as(self.profile_store(), name, data=data) if name is not None
+                     else self.document.save(data=data))
+            if not isinstance(saved, Profile):
+                raise RuntimeError("Teacher save returned no Profile; commit could not be confirmed.")
+            saved.reload()
+            self._video_profile = saved  # Save As keeps the current playhead and player.
+            self.activate_profile(saved)
+            self.edited.emit()
+        except Exception as exc:
+            logging.exception("Teacher profile commit failed")
+            error = exc
+        finally:
+            self.pending_write = False
+            self.setEnabled(True)
+            self.busy_changed.emit(False)
+        if error is not None:
+            self.message.emit(f"Save failed for {self.document.profile.path}: {error}")
             return False
-        self.activate_profile(result[0][0])
-        self.edited.emit()
-        self.message.emit("Saved teacher boxes and game-space PNGs to the active profile.")
+        self.message.emit(f"Saved {saved.path}" + (f" • Invalid editor text preserved in {draft}" if draft else ""))
         return True
 
     def save_as(self):
-        if getattr(self.window(), "editing_dirty", False):
-            self.message.emit("Save the Profile tab's YAML edits first; your teacher boxes stay in memory.")
-            return
+        if self.pending_write:
+            self.message.emit("Wait for the current file operation to finish.")
+            return False
         name, ok = QInputDialog.getText(self, "Save teacher as", "New profile name")
         if not ok or not name:
             return
-        store = self.profile_store()
-        self.authoring.emit()
-        self.write_job(lambda: self.document.save_as(store, name), self.activate_profile)
+        return self.commit_document(name)
 
     def profile_store(self):
         host = self.window()
@@ -436,14 +499,46 @@ class VideoTeacher(QWidget):
 
     def open_file(self, path):
         self.authoring.emit()
-        self.video_path = self.audio_path = Path(path)
+        self.clear_video()
+        self.video_path = self.audio_path = Path(path).resolve()
+        self.document.set_video(self.video_path)
+        self.source.open(self.video_path)
+        self.refresh_boxes()
+
+    def clear_video(self):
+        self.source.close()
+        self.video_path = self.audio_path = None
         self._audio_request += 1
         self.reported_size = None
         self.canvas.image = self.canvas.frame = None
+        self.draw_frame = None
         self.crop_frozen = False
         self.scrub.dragging = False
         self.wave.set_samples(np.empty(0, np.float32))
-        self.source.open(self.video_path)
+        self.canvas.outer = self.canvas.inner = None
+        self.canvas.update()
+        self.on_duration(0)
+        self.on_position(0)
+        self.video_label.setText("Video: —")
+        self.warning.setText("Video authoring only. Runtime uses the live game capture.")
+        self.cursor_info.setText("preview —  |  video —  |  game —")
+
+    def restore_video(self):
+        self.clear_video()
+        if "teacher_video" not in self.profile.data:
+            return  # A new profile has no previous recording to restore.
+        saved = self.profile.data["teacher_video"]
+        try:
+            path = Path(saved) if isinstance(saved, str) and saved.strip() else None
+            if path is None or not path.is_absolute() or not path.is_file():
+                raise FileNotFoundError
+        except (OSError, ValueError):
+            text = f"The last used video couldn't be found:\n{saved or ''}"
+            self.message.emit(text)
+            QMessageBox.warning(self, "Teaching video unavailable", text)
+            return
+        self.video_path = self.audio_path = path
+        self.source.open(path)
 
     def on_video_frame(self, video_frame):
         if not video_frame.isValid() or self.crop_frozen:

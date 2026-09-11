@@ -63,6 +63,7 @@ class TeacherDocument:
         self.resolution = tuple(profile.data["resolution"])
         self.mode = profile.data.get("video_scale_mode", "fit")
         self.source_size = profile.data.get("video_source_resolution")
+        self.video_path = profile.data.get("teacher_video")
         self.rescale_existing = False
         self.settings_dirty = False
         self.changes: dict[str, Crop | None] = {}
@@ -106,19 +107,27 @@ class TeacherDocument:
         self.rescale_existing = rescale
         self.settings_dirty = True
 
-    def save(self, target: Profile | None = None):
+    def set_video(self, path):
+        value = str(Path(path).resolve())
+        if self.video_path != value:
+            self.video_path = value
+            self.settings_dirty = True
+
+    def save(self, target: Profile | None = None, *, data=None):
         """Stage crop exports first; commit the live YAML last, with rollback."""
         from gui.video_teacher import ROLES, save_frame_role
         target = target or self.profile
         if any(crop is None for crop in self.changes.values()):
             raise ValueError("Finish or redraw the empty selection before saving.")
         with tempfile.TemporaryDirectory(prefix="mo2fish-teacher-") as directory:
-            stage = ProfileStore(Path(directory)).clone(target.path, "Stage")
+            stage = ProfileStore(Path(directory)).clone(target.path, "Stage", data=data)
             if self.rescale_existing and tuple(stage.data["resolution"]) != self.resolution:
                 rescale_profile(stage, self.resolution, self.mode)
             data = copy.deepcopy(stage.data)
             data["resolution"], data["video_scale_mode"] = list(self.resolution), self.mode
             data["video_source_resolution"] = self.source_size
+            if self.video_path is not None:
+                data["teacher_video"] = self.video_path
             stage.write(data)
             # Template-specific selections cannot overwrite the common search
             # region. Explicit universal selections always define it once.
@@ -160,6 +169,6 @@ class TeacherDocument:
         self.load(target)
         return target
 
-    def save_as(self, store: ProfileStore, name: str):
-        target = store.clone(self.profile.path, name)
+    def save_as(self, store: ProfileStore, name: str, *, data=None):
+        target = store.clone(self.profile.path, name, data=data)
         return self.save(target)

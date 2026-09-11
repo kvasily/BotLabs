@@ -76,6 +76,12 @@ def check_playback(teacher, app, directory: Path, destination: Path | None = Non
                 host.tabs.setCurrentWidget(teacher)
             app.processEvents()
             host.grab().save(str(destination / "MO2Fish-synchronized-player.png"))
+            expanded = teacher.audio_splitter.button.isChecked()
+            teacher.audio_splitter.set_audio_expanded(False)
+            app.processEvents()
+            assert teacher.audio_splitter.sizes()[1] == 0
+            host.grab().save(str(destination / "MO2Fish-audio-collapsed.png"))
+            teacher.audio_splitter.set_audio_expanded(expanded)
         return f"PASS: Qt FFmpeg H.264/AAC 2560x1440 playback {ratio:.2f}×, {decoded['audio']} non-silent decoded audio samples; live drag stable; seek retains 1.5×"
     finally:
         source.close()
@@ -85,4 +91,4 @@ def check_playback(teacher, app, directory: Path, destination: Path | None = Non
         source.frame.disconnect(frame)
         source.failed.disconnect(errors.append)
         teacher.video_path = teacher.audio_path = None
-        teacher.document.source_size = teacher.profile.data.get("video_source_resolution")
+        teacher.document.load(teacher.profile)
